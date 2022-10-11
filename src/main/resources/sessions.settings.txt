@@ -1,0 +1,33 @@
+[DEFAULT]# Settings which apply to all the Sessions
+BeginString=FIX.4.4
+SenderCompID=RENKO-BOT
+ConnectionType=initiator
+LogonTimeout=30
+ReconnectInterval=30
+ResetOnLogon=Y
+StartTime=00:00:00
+EndTime=00:00:00
+HeartBtInt=30
+CheckLatency=N
+MaxLatency=240
+FileStorePath=./sessions/
+UseDataDictionary=Y
+DataDictionary=XTRD.xml
+UseLocalTime=N
+MillisecondsInTimeStamp=Y
+ScreenLogShowIncoming=N
+ScreenLogShowOutgoing=N
+ScreenLogShowEvents=N
+SocketUseSSL=Y
+
+[SESSION]# Settings specifically for market data session
+TargetCompID=XTRD-MD
+SocketConnectPort=5003
+SocketConnectHost=10.1.1.11
+
+[SESSION]# Settings specifically for trading session
+TargetCompID=XTRD-TRD
+SocketConnectPort=5003
+SocketConnectHost=10.1.1.12
+SessionQualifier=TRADE
+
