@@ -15,19 +15,30 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class OMS {
-    private final Logger logger = LoggerFactory.getLogger(OMS.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(OMS.class);
     private final AtomicInteger orderId = new AtomicInteger(1);
-    private List<Order> executedOrders;
-    private HashMap<String, Order> limitOrders;
+    private final AtomicInteger positionHeldCounter = new AtomicInteger(0);
+    private final int maxPositionHeld;
+    private final List<Order> executedOrders;
+    private final List<Order> positionHeldOrders;
+    private final HashMap<String, Order> limitOrders;
     private BigDecimal cumulativeSize;
-    private EventProcessor eventProcessor;
-    private Symbol symbol;
+    private final EventProcessor eventProcessor;
+    private final Symbol symbol;
     private Order lastLimitOrder;
 
-    public OMS(Symbol symbol, BigDecimal renkoBrickSize, BigDecimal orderSize, EventProcessor eventProcessor) {
-        executedOrders = new ArrayList<>();
-        limitOrders = new HashMap<>();
-        cumulativeSize = BigDecimal.ZERO;
+    public OMS(
+            Symbol symbol,
+            BigDecimal renkoBrickSize,
+            BigDecimal orderSize,
+            int maxPositionHeld,
+            EventProcessor eventProcessor
+    ) {
+        this.executedOrders = new ArrayList<>();
+        this.positionHeldOrders = new ArrayList<>();
+        this.limitOrders = new HashMap<>();
+        this.cumulativeSize = BigDecimal.ZERO;
+        this.maxPositionHeld = maxPositionHeld;
         this.symbol = symbol;
         this.eventProcessor = eventProcessor;
         eventProcessor.addConsumer(Brick.class, getRenkoBrickConsumer(renkoBrickSize, orderSize));
@@ -49,6 +60,7 @@ public class OMS {
                     if (order.getSide() == Side.Sell) {
                         cumulativeSize = cumulativeSize.subtract(order.getSize());
                     } else {
+                        positionHeldOrders.add(order);
                         cumulativeSize = cumulativeSize.add(order.getSize());
                     }
                     eventProcessor.putEvent(new OrderDrawEvent(OrderOperation.fill, order));
@@ -68,44 +80,49 @@ public class OMS {
     private Consumer<Brick> getRenkoBrickConsumer(BigDecimal renkoBrickSize, BigDecimal orderSize) {
         return brick -> {
             if (brick.getOpen().compareTo(brick.getClose()) < 0) {
-                processRisingBrick(renkoBrickSize, orderSize, brick);
+                processBuyRisingBrick(renkoBrickSize, orderSize, brick);
             } else {
-                processFallingBrick(renkoBrickSize, orderSize, brick);
+                processSellFallingBrick(renkoBrickSize, orderSize, brick);
             }
         };
     }
 
-    private void processFallingBrick(BigDecimal renkoBrickSize, BigDecimal orderSize, Brick brick) {
-        //brick closed down, close sell limit orders, open new buy limit order
-        closeLimitOrders(Side.Sell);
-        //link limit order to brick time
-        Iterator<Order> iterator = limitOrders.values().iterator();
-        while (iterator.hasNext()) {
-            Order order = iterator.next();
-            if (order.getSide() == Side.Buy && order.getPrice().compareTo(brick.getClose()) >= 0 && order.getLinkedExecBrick() == null) {
-                order.setLinkedExecBrick(brick);
-                if (order.getExecuteTime() != 0) {
-                    //filled, should be redrawn and removed from limit orders
-                    iterator.remove();
-                    executedOrders.add(order);
-                    eventProcessor.putEvent(new OrderDrawEvent(OrderOperation.fill, order));
+    private void processBuyRisingBrick(BigDecimal renkoBrickSize, BigDecimal orderSize, Brick brick) {
+        if (positionHeldCounter.incrementAndGet() <= maxPositionHeld) {
+            //brick closed down, close sell limit orders, open new buy limit order
+            closeLimitOrders(Side.Sell);
+            //link limit order to brick time
+            Iterator<Order> iterator = limitOrders.values().iterator();
+            while (iterator.hasNext()) {
+                Order order = iterator.next();
+                if (order.getSide() == Side.Buy && order.getPrice().compareTo(brick.getClose()) >= 0 && order.getLinkedExecBrick() == null) {
+                    order.setLinkedExecBrick(brick);
+                    if (order.getExecuteTime() != 0) {
+                        //filled, should be redrawn and removed from limit orders
+                        iterator.remove();
+                        executedOrders.add(order);
+                        eventProcessor.putEvent(new OrderDrawEvent(OrderOperation.fill, order));
+                    }
                 }
             }
-        }
-        if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) < 0) {
-            BigDecimal newOrderSize = orderSize;
-            if (cumulativeSize.compareTo(BigDecimal.ZERO) < 0) {
-                newOrderSize = cumulativeSize.negate();
+            if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) < 0) {
+                BigDecimal newOrderSize = orderSize;
+                if (cumulativeSize.compareTo(BigDecimal.ZERO) < 0) {
+                    newOrderSize = cumulativeSize.negate();
+                }
+                Order order = new Order(symbol, getNextOrderId(), Side.Buy, brick.getClose().add(renkoBrickSize), newOrderSize);
+                order.setLinkedLimitBrick(brick);
+                limitOrders.put(order.getClOrdID(), order);
+                lastLimitOrder = order;
+                eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, order));
             }
-            Order order = new Order(symbol, getNextOrderId(), Side.Buy, brick.getClose().subtract(renkoBrickSize), newOrderSize);
-            order.setLinkedLimitBrick(brick);
-            limitOrders.put(order.getClOrdID(), order);
-            lastLimitOrder = order;
-            eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, order));
+        } else {
+            LOGGER.info("Brick will be ignored");
         }
     }
 
-    private void processRisingBrick(BigDecimal renkoBrickSize, BigDecimal orderSize, Brick brick) {
+    private void processSellFallingBrick(BigDecimal renkoBrickSize, BigDecimal orderSize, Brick brick) {
+
         //brick closed up, close buy limit orders, open new sell limit order
         closeLimitOrders(Side.Buy);
         //link limit order to brick time
@@ -122,7 +139,7 @@ public class OMS {
                 }
             }
         }
-        if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) > 0) {
+        if (lastLimitOrder == null) {
             BigDecimal newOrderSize = orderSize;
             if (cumulativeSize.compareTo(BigDecimal.ZERO) > 0) {
                 newOrderSize = cumulativeSize;
@@ -133,9 +150,23 @@ public class OMS {
             lastLimitOrder = order;
             eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, order));
         }
+
+
+        positionHeldOrders.forEach(order -> {
+            Order closeOrder = new Order(symbol, getNextOrderId(), Side.Sell, brick.getClose().add(renkoBrickSize), order.getSize());
+            closeOrder.setLinkedLimitBrick(brick);
+            limitOrders.put(closeOrder.getClOrdID(), order);
+            eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, closeOrder));
+            closeOrder.setLinkedExecBrick(brick);
+        });
+
+        positionHeldOrders.clear();
+        positionHeldCounter.set(0);
+
     }
 
     private void closeLimitOrders(Side side) {
+        LOGGER.info("Fire order command event, Side={}", side);
         Iterator<Order> iterator = limitOrders.values().iterator();
         while (iterator.hasNext()) {
             Order order = iterator.next();

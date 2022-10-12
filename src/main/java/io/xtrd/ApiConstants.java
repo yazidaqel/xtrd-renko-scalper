@@ -16,6 +16,7 @@ public interface ApiConstants {
 
     String CONFIG_RENKO_SIZE = "renko.size";
     String CONFIG_ORDER_SIZE = "order.size";
+    String CONFIG_ORDER_MAX_POSITIONS_HELD = "order.max.positions.held";
     String CONFIG_FIX_SESSION_CONFIG = "fix.session.config";
     String CONFIG_FIX_SESSION_USERNAME = "fix.session.username";
     String CONFIG_FIX_SESSION_PASSWORD = "fix.session.password";

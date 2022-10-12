@@ -67,7 +67,7 @@ public class MainApp extends Application {
         launch(args);
     }
 
-    private void logVersions(WebView web){
+    private void logVersions(WebView web) {
         logger.info("Java Version:   {}", System.getProperty("java.runtime.version"));
         logger.info("JavaFX Version: {}", System.getProperty("javafx.runtime.version"));
         logger.info("OS:             {}, {}", System.getProperty("os.name"), System.getProperty("os.arch"));
@@ -75,7 +75,7 @@ public class MainApp extends Application {
     }
 
     private void startFixEngine() throws Exception {
-        if (config.getProperty(ApiConstants.CONFIG_SANDBOX_EXECUTION,"false").equals("false")) {
+        if (config.getProperty(ApiConstants.CONFIG_SANDBOX_EXECUTION, "false").equals("false")) {
             fixApplication = new QuickFIXApplication(eventProcessor);
         } else {
             fixApplication = new QuickFIXApplication(eventProcessor, true);
@@ -114,18 +114,13 @@ public class MainApp extends Application {
             webKitVersion = Integer.parseInt(userAgent.substring(index + 7, index + 10));
         } finally {
         }
-        if (webKitVersion<ApiConstants.MINIMUM_WEBKIT_VERSION) {
+        if (webKitVersion < ApiConstants.MINIMUM_WEBKIT_VERSION) {
             logVersions(webView);
-            logger.error("Current WebKit version {} does not support ECMAScript6 and CSS3. Please, update jdk.",webKitVersion);
+            logger.error("Current WebKit version {} does not support ECMAScript6 and CSS3. Please, update jdk.", webKitVersion);
             throw new Exception("Current WebKit version does not support ECMAScript6 and CSS3");
         }
         initWebEngine(webEngine);
         JSChartBridge jsChartBridge = new JSChartBridge(webEngine);
-        WebConsoleListener.setDefaultListener((webViewX, message, lineNumber, sourceId) -> {
-            if (logger.isDebugEnabled()) {
-                logger.debug("{} [at {}]", message, lineNumber);
-            }
-        });
 
         eventProcessor = new EventProcessor();
         eventProcessor.start();
@@ -134,6 +129,7 @@ public class MainApp extends Application {
         Scene scene = new Scene(layout, 850, 650);
         scene.getStylesheets().add("/styles/styles.css");
         stage.setScene(scene);
+        stage.setMaximized(true);
         stage.show();
         // now load the page
         URL url = new File("src/main/resources/html/renko.html").toURI().toURL();
@@ -145,6 +141,7 @@ public class MainApp extends Application {
 
     private MigPane createLayout(Stage stage, WebView webView, JSChartBridge jsChartBridge) {
         MigPane layout = new MigPane();
+
         layout.add(new Label("Renko size:"), "align label,span, split 8");
         TextField renkoSizeText = new TextField(config.getProperty(ApiConstants.CONFIG_RENKO_SIZE, ""));
         renkoSizeText.setMaxWidth(70);
@@ -155,17 +152,25 @@ public class MainApp extends Application {
         orderSizeText.setMaxWidth(70);
         orderSizeText.setAlignment(Pos.CENTER_RIGHT);
         layout.add(orderSizeText);
+
+        layout.add(new Label("Positions:"), "align label,span");
+        TextField maxPositionHeldText = new TextField(config.getProperty(ApiConstants.CONFIG_ORDER_MAX_POSITIONS_HELD, ""));
+        maxPositionHeldText.setMaxWidth(70);
+        maxPositionHeldText.setAlignment(Pos.CENTER_RIGHT);
+        layout.add(maxPositionHeldText);
+
         layout.add(new Label("Symbol:"), "align label,span");
-        ComboBox<Symbol> subscriptionComboBox = new ComboBox<Symbol>();
+        ComboBox<Symbol> subscriptionComboBox = new ComboBox<>();
         ObservableList<Symbol> items = FXCollections.observableArrayList(new ArrayList<>());
         subscriptionComboBox.setItems(items);
         subscriptionComboBox.setDisable(true);
+        subscriptionComboBox.setMinWidth(170);
         layout.add(subscriptionComboBox, "grow");
         Button startButton = new Button("Start");
         startButton.setDisable(true);
         Button connectButton = new Button("Connect");
-        layout.add(connectButton, "right, top");
-        layout.add(startButton, "right, top");
+        layout.add(connectButton);
+        layout.add(startButton, "wrap");
         layout.add(webView, "push, span, grow, wrap");
 
         subscriptionComboBox.valueProperty().addListener((observable, oldValue, newValue) -> {
@@ -173,7 +178,7 @@ public class MainApp extends Application {
                 startButton.setDisable(false);
             }
         });
-        startButton.setOnAction(getStartButtonHandler(startButton, renkoSizeText, orderSizeText, subscriptionComboBox, jsChartBridge));
+        startButton.setOnAction(getStartButtonHandler(startButton, renkoSizeText, orderSizeText, maxPositionHeldText, subscriptionComboBox, jsChartBridge));
         connectButton.setOnAction(getConnectButtonHandler(connectButton));
 
         Consumer<SecurityListEvent> securityListConsumer = (list) -> Platform.runLater(() -> {
@@ -192,7 +197,7 @@ public class MainApp extends Application {
                     eventProcessor.putEvent(new SubscribeEvent(subscriptionSymbol));
                 }
                 Platform.runLater(() -> stage.setTitle("Renko scalper (connected)"));
-            } else if (status == SessionStatus.DISCONNECTED){
+            } else if (status == SessionStatus.DISCONNECTED) {
                 Platform.runLater(() -> stage.setTitle("Renko scalper (disconnected)"));
             }
         });
@@ -241,16 +246,17 @@ public class MainApp extends Application {
     }
 
 
-    EventHandler<ActionEvent> getStartButtonHandler(Button startButton, TextField renkoSizeText, TextField orderSizeText, ComboBox<Symbol> subscriptionComboBox, JSChartBridge jsChartBridge) {
+    EventHandler<ActionEvent> getStartButtonHandler(Button startButton, TextField renkoSizeText, TextField orderSizeText, TextField maxPositionHeldText, ComboBox<Symbol> subscriptionComboBox, JSChartBridge jsChartBridge) {
         return e -> {
             startButton.setDisable(true);
             subscriptionSymbol = subscriptionComboBox.getValue();
             BigDecimal brickSize = new BigDecimal(renkoSizeText.getText());
             BigDecimal orderSize = new BigDecimal(orderSizeText.getText());
+            int maxPositionHeld = Integer.parseInt(maxPositionHeldText.getText());
             jsChartBridge.call(JSChartBridge.FunctionName.changePrecision, subscriptionSymbol.getPricePower());
 
-            OMS oms = new OMS(subscriptionSymbol, brickSize, orderSize, eventProcessor);
-            RenkoModel renkoModel = new RenkoModel(brickSize, eventProcessor);
+            new OMS(subscriptionSymbol, brickSize, orderSize, maxPositionHeld, eventProcessor);
+            new RenkoModel(brickSize, eventProcessor);
 
             String priceSourceStr = config.getProperty(ApiConstants.CONFIG_PRICE_SOURCE);
             PriceSource priceSource = PriceSource.TRADES;
