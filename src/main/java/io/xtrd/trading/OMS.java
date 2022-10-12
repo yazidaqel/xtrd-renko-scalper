@@ -105,7 +105,7 @@ public class OMS {
                     }
                 }
             }
-            if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) < 0) {
+            if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) > 0) {
                 BigDecimal newOrderSize = orderSize;
                 if (cumulativeSize.compareTo(BigDecimal.ZERO) < 0) {
                     newOrderSize = cumulativeSize.negate();
@@ -139,7 +139,7 @@ public class OMS {
                 }
             }
         }
-        if (lastLimitOrder == null) {
+        if (lastLimitOrder == null || brick.getClose().compareTo(lastLimitOrder.getPrice()) < 0) {
             BigDecimal newOrderSize = orderSize;
             if (cumulativeSize.compareTo(BigDecimal.ZERO) > 0) {
                 newOrderSize = cumulativeSize;
@@ -151,17 +151,18 @@ public class OMS {
             eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, order));
         }
 
+        if (!positionHeldOrders.isEmpty()) {
+            positionHeldOrders.forEach(order -> {
+                Order closeOrder = new Order(symbol, getNextOrderId(), Side.Sell, brick.getClose().add(renkoBrickSize), order.getSize());
+                closeOrder.setLinkedLimitBrick(brick);
+                limitOrders.put(closeOrder.getClOrdID(), order);
+                eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, closeOrder));
+                closeOrder.setLinkedExecBrick(brick);
+            });
 
-        positionHeldOrders.forEach(order -> {
-            Order closeOrder = new Order(symbol, getNextOrderId(), Side.Sell, brick.getClose().add(renkoBrickSize), order.getSize());
-            closeOrder.setLinkedLimitBrick(brick);
-            limitOrders.put(closeOrder.getClOrdID(), order);
-            eventProcessor.putEvent(new OrderCommandEvent(OrderOperation.add, closeOrder));
-            closeOrder.setLinkedExecBrick(brick);
-        });
-
-        positionHeldOrders.clear();
-        positionHeldCounter.set(0);
+            positionHeldOrders.clear();
+            positionHeldCounter.set(0);
+        }
 
     }
 
